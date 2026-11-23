@@ -2,9 +2,9 @@
 
 **Standalone Instagram Reel monitoring and video-processing tools by $mity.**
 
-Mity-Clipping-Studio contains two independent Python scripts and a colored shell launcher. The Instagram monitor detects newly shared Reel cards in a selected Instagram Direct conversation and downloads the corresponding videos. The video processor prepares eligible source videos for vertical publishing by adding the configured watermark and cover image.
+Mity-Clipping-Studio contains two independent Python scripts and native launchers for Linux and Windows. The Instagram monitor watches one selected Instagram Direct conversation and downloads newly shared Reel cards. The video processor prepares eligible source videos for vertical publishing.
 
-The tools are intentionally independent: downloading a Reel does **not** automatically start video processing. Use the launcher to choose which task to run.
+The tools are intentionally independent: downloading a Reel does **not** automatically start video processing. Use the launcher to choose which task to run. This test package includes the 8.5.1 monitor patch that removes persistent structural-card deduplication while preserving URL-based duplicate-download protection.
 
 ## Features
 
@@ -17,8 +17,9 @@ The tools are intentionally independent: downloading a Reel does **not** automat
 - Uses a left-side message-layout heuristic to identify incoming-looking cards. This is not verified sender identity.
 - Opens the candidate card in a temporary tab and keeps the monitored conversation tab separate.
 - Captures the shared Reel/post permalink and downloads it with `yt-dlp`.
-- Uses cookies from the dedicated Chrome profile.
-- Maintains a download archive, monitor state, and logs to help avoid duplicate downloads.
+- Reads cookies from the dedicated Chrome profile.
+- Maintains a download archive, monitor state, and logs. Duplicate downloads are prevented using captured Reel/post URLs rather than card-layout signatures, which can be identical for different newly received Reels.
+- Uses the existing Linux Chrome profile path to preserve a previous login. On Windows, the dedicated profile is stored in the user's Local AppData directory.
 
 ### Video processing
 
@@ -29,7 +30,7 @@ The tools are intentionally independent: downloading a Reel does **not** automat
 - Applies the green-screen watermark using FFmpeg chroma key.
 - Places `cover.jpg` on the first output frame only.
 - Preserves source audio when present.
-- Limits the output duration to the source video's duration.
+- Limits output duration to the source video's duration.
 - Skips existing outputs unless force mode is explicitly selected.
 - Writes an FFmpeg log for each processed source video.
 
@@ -44,169 +45,210 @@ The video processor enforces a **9.0-second minimum duration** using `ffprobe` b
 | Greater than 9.0 seconds | Eligible for processing |
 | Duration missing or invalid | Cannot be verified; processing fails safely |
 
-The check uses the probed duration, not a rounded display value. The rule also applies in `--test`, `--batch`, and `--batch --force` modes. A short source file is **left in `input/reels/` unchanged**; it is not deleted or moved automatically. The minimum is currently defined in `process_videos.py` as `MIN_REEL_DURATION_SECONDS = 9.0`.
+The check uses the probed duration, not a rounded display value. The rule applies in `--test`, `--batch`, and `--batch --force` modes. A short source file is **left in `input/reels/` unchanged**; it is not deleted or moved automatically. The default minimum is defined in `video-processing/process_videos.py` as `MIN_REEL_DURATION_SECONDS = 9.0`.
 
 ## Project structure
 
-Clone or place the project at `~/Mity-Clipping-Studio`, because the supplied `run.sh` launcher expects that location.
+The launchers resolve all project paths relative to their own location. You can clone the repository into any directory; `~/Mity-Clipping-Studio` is the suggested location, not a hard requirement.
 
 ```text
-~/Mity-Clipping-Studio/
+Mity-Clipping-Studio/
+├── .gitattributes
 ├── .gitignore
 ├── README.md
-├── run.sh
+├── requirements.txt
+├── setup.sh                 # Linux installer
+├── run.sh                   # Linux launcher
+├── setup.ps1                # Windows installer
+├── run.ps1                  # Windows launcher
 │
 ├── instagram-dm/
 │   ├── instagram_dm_monitor.py
-│   ├── .venv/                   # Created locally; not committed
-│   ├── monitor_state.json       # Created at runtime; not committed
-│   ├── reel_links.txt           # Created at runtime; not committed
-│   ├── yt_dlp_archive.txt      # Created at runtime; not committed
-│   └── monitor.log              # Created at runtime; not committed
+│   └── .venv/                # Created locally; not committed
 │
 └── video-processing/
     ├── process_videos.py
     ├── input/
-    │   ├── reels/                # Downloaded/source videos
+    │   ├── reels/            # Downloaded/source videos
+    │   ├── staging/          # Reserved for temporary downloads
+    │   ├── rejected/         # Reserved for rejected videos
     │   └── assets/
-    │       ├── greenscreen.mp4   # Required watermark asset
-    │       └── cover.jpg         # Required first-frame cover
-    ├── output/                  # Rendered videos
-    └── logs/                    # Per-video FFmpeg logs
+    │       ├── greenscreen.mp4   # Required watermark asset (user-supplied)
+    │       └── cover.jpg         # Required first-frame cover (user-supplied)
+    ├── output/               # Rendered videos
+    └── logs/                 # Per-video FFmpeg logs
 ```
 
-The `.gitkeep` files preserve empty directories in Git. The `.venv`, downloaded videos, processed outputs, private assets, and runtime logs/state are excluded from Git by `.gitignore`.
+Runtime files such as monitor state, download archives, logs, virtual environments, downloaded videos, rendered videos, and private assets are excluded from Git by `.gitignore`.
 
 ## Requirements
 
-- Ubuntu 24.04 (or a compatible Linux distribution).
-- Python 3.10 or newer.
-- Google Chrome Stable. The monitor launches the installed Chrome using Playwright's `channel="chrome"` option.
+### Required for both operating systems
+
+- 64-bit Windows 10/11 or a compatible Linux distribution.
+- Python **3.11 or newer**.
+- Internet access during first-time setup to install Python packages.
+- Google Chrome Stable for the Instagram monitor.
 - FFmpeg and `ffprobe` for video processing.
-- A working Instagram account that can access the target Direct conversation.
-- The two required video assets: `greenscreen.mp4` and `cover.jpg`.
+- An Instagram account with access to the target Direct conversation.
+- The two required user-supplied assets: `greenscreen.mp4` and `cover.jpg`.
 
-## Installation
+### Python packages
 
-### 1. Install system packages
+The installer creates a virtual environment at `instagram-dm/.venv` and installs the packages listed in `requirements.txt`:
 
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip ffmpeg
-```
+- `playwright`
+- `yt-dlp`
+- `secretstorage` on Linux only (for access to the Linux desktop keyring when yt-dlp reads Chrome cookies).
 
-Install Google Chrome Stable if it is not already installed. Download it from the official page:
+The video processor uses Python's standard library plus the external FFmpeg executables. It does not require a separate Python video-editing package.
 
-<https://www.google.com/chrome/>
+### Why the installer does not download Playwright Chromium
 
-Check the system tools:
+The monitor launches the branded Google Chrome installation through Playwright's `channel="chrome"` option. Therefore, setup installs the Playwright Python package and checks for Google Chrome Stable; it does not download a separate Playwright Chromium browser build. See the [Playwright browser documentation](https://playwright.dev/python/docs/browsers).
 
-```bash
-google-chrome --version
-ffmpeg -version
-ffprobe -version
-python3 --version
-```
+## Installation — Ubuntu / Debian Linux
 
-### 2. Get the project
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YosefElsersy/Mity-Clipping-Studio.git ~/Mity-Clipping-Studio
-cd ~/Mity-Clipping-Studio
+git clone https://github.com/YosefElsersy/Mity-Clipping-Studio.git
+cd Mity-Clipping-Studio
 ```
 
-If the project is already cloned, simply enter the project directory:
+You may place the project in a different directory; the launchers resolve paths relative to the project folder.
+
+### 2. Run the installer
 
 ```bash
-cd ~/Mity-Clipping-Studio
+chmod +x setup.sh run.sh
+./setup.sh
 ```
 
-### 3. Make the launcher executable
+The installer:
 
-```bash
-chmod +x run.sh
-```
+1. Checks for Python 3.11 or newer. If it is missing, it can offer to install the distribution Python, venv, and pip packages using `apt`.
+2. Creates `instagram-dm/.venv` if it does not already exist.
+3. Upgrades pip inside that environment.
+4. Installs `requirements.txt` into that environment.
+5. Creates the project input, output, and log directories.
+6. Checks for Google Chrome Stable, FFmpeg, and `ffprobe`.
+7. On Debian/Ubuntu systems, offers to install missing Google Chrome and/or FFmpeg using `apt` and `sudo`. It asks before running privileged package-manager commands.
+8. Checks whether the required user assets are present.
 
-### 4. Create the Instagram monitor virtual environment
+If the installer asks whether to install Python or system dependencies, answer `Y` to approve or `n` to skip. If skipped, install the missing tool manually and rerun the setup check.
 
-The monitor uses its own virtual environment inside `instagram-dm/`:
+### 3. Add your private assets
 
-```bash
-cd ~/Mity-Clipping-Studio/instagram-dm
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install playwright yt-dlp secretstorage
-```
-
-The monitor uses the installed Google Chrome browser, so the project does not require downloading a separate Playwright Chromium browser for this configuration.
-
-Deactivate the virtual environment when finished setting it up:
-
-```bash
-deactivate
-```
-
-The video-processing script uses Python's standard library and the system `ffmpeg`/`ffprobe` commands; it does not require the monitor virtual environment.
-
-### 5. Add the required assets
-
-Create the assets directory if needed:
-
-```bash
-mkdir -p ~/Mity-Clipping-Studio/video-processing/input/assets
-```
-
-Place these two files there:
+Place your own files at these exact paths:
 
 ```text
 video-processing/input/assets/greenscreen.mp4
 video-processing/input/assets/cover.jpg
 ```
 
-These assets are intentionally excluded from Git. Copy them into the project yourself; they are not downloaded automatically by the setup commands.
+These files are private/user-supplied assets and are intentionally excluded from Git. The installer does not download or create replacement assets.
 
-### 6. Create the remaining working directories
-
-```bash
-mkdir -p ~/Mity-Clipping-Studio/video-processing/input/reels
-mkdir -p ~/Mity-Clipping-Studio/video-processing/output
-mkdir -p ~/Mity-Clipping-Studio/video-processing/logs
-```
-
-## Run the unified shell menu
-
-Start the colored launcher:
+### 4. Launch the menu
 
 ```bash
-cd ~/Mity-Clipping-Studio
 ./run.sh
 ```
 
-The launcher provides these options:
+On the first launch, `run.sh` checks the virtual environment and required Python packages. If they are missing, it offers to run `setup.sh` automatically. After the first-time setup succeeds, later launches go directly to the menu. You can skip this automatic setup prompt by setting `MITY_SKIP_AUTO_SETUP=1`.
 
-| Menu option | Action |
+## Installation — Windows 10 / 11
+
+Use Windows PowerShell or Windows Terminal.
+
+### 1. Clone the repository
+
+```powershell
+git clone https://github.com/YosefElsersy/Mity-Clipping-Studio.git
+cd Mity-Clipping-Studio
+```
+
+### 2. Run the installer
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\setup.ps1
+```
+
+The execution-policy command applies only to the current PowerShell process; it does not permanently change the system policy.
+
+The installer:
+
+1. Checks for Python 3.11 or newer. If it is missing and WinGet is available, it offers to install Python 3.12 using `Python.Python.3.12`.
+2. Creates `instagram-dm\.venv`.
+3. Installs the Python packages from `requirements.txt`.
+4. Creates the project directories.
+5. Checks for Google Chrome Stable and FFmpeg/`ffprobe`.
+6. If `winget` is available, offers to install missing system dependencies using the package IDs `Google.Chrome` and `Gyan.FFmpeg`. It asks before installing.
+7. Checks for the required user-supplied assets.
+
+If WinGet is unavailable, install the missing system tools manually:
+
+- [Google Chrome](https://www.google.com/chrome/)
+- [FFmpeg Windows builds](https://www.gyan.dev/ffmpeg/builds/)
+
+After WinGet installs a system tool, close and reopen PowerShell if the current session does not yet see the updated PATH.
+
+### 3. Add your private assets
+
+Place your own files at:
+
+```text
+video-processing\input\assets\greenscreen.mp4
+video-processing\input\assets\cover.jpg
+```
+
+### 4. Launch the menu
+
+```powershell
+.\run.ps1
+```
+
+On the first launch, `run.ps1` checks the virtual environment and required Python packages. If they are missing, it offers to run `setup.ps1` automatically. After first-time setup succeeds, later launches go directly to the menu. You can skip this automatic setup prompt by setting `$env:MITY_SKIP_AUTO_SETUP = '1'`.
+
+If PowerShell blocks the script, use the process-scoped execution-policy command shown above, then run `run.ps1` again.
+
+## Launcher menu
+
+Both launchers provide equivalent options:
+
+| Option | Action |
 |---|---|
 | 1 | Start the Instagram DM monitor |
 | 2 | Process one eligible test video (minimum 9 seconds) |
 | 3 | Process all eligible Reels (minimum 9 seconds) |
-| 4 | Reprocess all eligible Reels, replacing existing outputs after successful rendering |
+| 4 | Reprocess eligible Reels, replacing existing outputs after successful rendering |
 | 5 | Open the downloaded Reels folder |
 | 6 | Open the processed videos folder |
 | 7 | Open the FFmpeg logs folder |
 | 8 | Check project files and dependencies |
 | 0 | Exit |
 
-The launcher returns to its menu after the selected script exits. The monitor itself remains active until you stop it with `Ctrl+C`.
+The launcher returns to its menu after the selected script exits. The monitor remains active until you stop it with `Ctrl+C`.
 
-## Run the Instagram monitor directly
+## Instagram DM monitor
 
-Open a terminal and run:
+The monitor can be started from option `1` in the launcher or directly.
+
+### Linux direct launch
 
 ```bash
-cd ~/Mity-Clipping-Studio/instagram-dm
+cd instagram-dm
 source .venv/bin/activate
 python instagram_dm_monitor.py
+```
+
+### Windows direct launch
+
+```powershell
+cd instagram-dm
+.\.venv\Scripts\Activate.ps1
+python .\instagram_dm_monitor.py
 ```
 
 In the dedicated Chrome window:
@@ -220,103 +262,88 @@ In the dedicated Chrome window:
 Newly downloaded Reels are saved to:
 
 ```text
-~/Mity-Clipping-Studio/video-processing/input/reels/
+video-processing/input/reels/
 ```
 
-The monitor continues to use this dedicated Chrome profile:
+The dedicated Chrome profile locations are:
 
-```text
-~/.local/share/instagram-dm/chrome-profile
-```
+- Linux: `~/.local/share/instagram-dm/chrome-profile` (kept unchanged to reuse an existing login).
+- Windows: `%LOCALAPPDATA%\Mity-Clipping-Studio\instagram-dm\chrome-profile`.
 
-This keeps the existing browser login separate from the project directory. Do not share the Chrome profile, cookies, or authentication data.
+This keeps browser login data outside the Git repository. Do not share the Chrome profile, cookies, or authentication data.
 
 The incoming-message detection is based on card position/layout and is not proof of the sender's identity. Instagram may change its web interface, which can affect detection. The monitor does not bypass login challenges, CAPTCHA, private-content restrictions, or other security checks.
 
-## Run video processing directly
+## Video processing
 
-Run a single test using the first **eligible** video (9 seconds or longer):
+Run a single test using the first **eligible** video (9 seconds or longer).
+
+### Linux
 
 ```bash
-cd ~/Mity-Clipping-Studio/video-processing
+cd video-processing
 python3 process_videos.py --test
-```
-
-Process all eligible videos:
-
-```bash
 python3 process_videos.py --batch
-```
-
-Reprocess eligible videos and replace existing output files only after a successful render:
-
-```bash
 python3 process_videos.py --batch --force
 ```
 
-The `--force` option does not bypass the 9-second minimum. Videos shorter than 9 seconds remain skipped.
+### Windows
 
-Processed files are written to:
-
-```text
-~/Mity-Clipping-Studio/video-processing/output/
+```powershell
+cd video-processing
+python process_videos.py --test
+python process_videos.py --batch
+python process_videos.py --batch --force
 ```
 
-The output filename is based on the source name, with `_processed.mp4` appended. For example, `example.mp4` becomes `example_processed.mp4`.
+Use `--batch --force` only when you intentionally want to replace existing outputs. It does not bypass the 9-second minimum.
 
-FFmpeg logs are written to:
+The `--test` mode selects the first eligible video, not necessarily the first filename in the directory. Short videos remain in `input/reels/` unchanged and are skipped. The processor never deletes original source videos.
 
-```text
-~/Mity-Clipping-Studio/video-processing/logs/
-```
+Processed files are written to `video-processing/output/`. Output filenames append `_processed.mp4` to the source filename. FFmpeg logs are written to `video-processing/logs/`.
 
 ## Typical workflow
 
 The two scripts are independent and are not automatically chained together:
 
-1. Start the Instagram monitor using option `1` in `./run.sh` (or run it directly).
+1. Start the Instagram monitor using option `1` in the launcher.
 2. Let it download shared Reels into `video-processing/input/reels/`.
-3. Stop the monitor with `Ctrl+C` when you are ready to process the downloaded files.
+3. Stop the monitor with `Ctrl+C` when ready to process.
 4. Return to the launcher and choose option `2` for a test or option `3` for batch processing.
 5. Review the rendered videos in `video-processing/output/`.
 
-You can also keep the monitor running in one terminal and run video processing from a second terminal if you want both scripts active at the same time. Avoid processing a file while it is still being downloaded.
+You can also keep the monitor running in one terminal and run video processing from a second terminal. Avoid processing a file while it is still being downloaded.
 
 ## Troubleshooting
 
-### The launcher says the monitor virtual environment is missing
+### Python virtual environment is missing
 
-Create it and install the packages:
+Rerun the platform setup script:
 
-```bash
-cd ~/Mity-Clipping-Studio/instagram-dm
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install playwright yt-dlp secretstorage
-```
+- Linux: `./setup.sh`
+- Windows: `.\setup.ps1` (from PowerShell)
 
 ### Google Chrome is not detected
 
-Install Google Chrome Stable from <https://www.google.com/chrome/> and verify that `google-chrome --version` works in the terminal.
+Install Google Chrome Stable from <https://www.google.com/chrome/>. The monitor uses Playwright's installed Chrome channel and does not use a separate downloaded Chromium build.
 
 ### FFmpeg or ffprobe is missing
 
-```bash
-sudo apt update
-sudo apt install -y ffmpeg
-```
+- Ubuntu/Debian: `sudo apt update && sudo apt install -y ffmpeg`
+- Windows: use the [Gyan FFmpeg builds](https://www.gyan.dev/ffmpeg/builds/) or install the `Gyan.FFmpeg` WinGet package.
+
+After changing system PATH on Windows, reopen PowerShell.
 
 ### Required assets are missing
 
-Check that both files exist at the exact paths:
+Check that both files exist in `video-processing/input/assets/`:
 
-```bash
-ls -lh ~/Mity-Clipping-Studio/video-processing/input/assets/
-```
+- `greenscreen.mp4`
+- `cover.jpg`
 
 ### A video is skipped as too short
 
-This is expected when `ffprobe` reports a duration below 9.0 seconds. The source file is left unchanged in `input/reels/`; it is not processed.
+This is expected when `ffprobe` reports a duration below 9.0 seconds. The source file is left unchanged in `input/reels/` and is not processed.
 
 ### A video fails during rendering
 
@@ -325,6 +352,16 @@ Open the corresponding log file in `video-processing/logs/`. The log filename is
 ### The monitor cannot use the Chrome profile
 
 Close other Chrome processes using the dedicated monitor profile and start the monitor again. Sign in manually in the Chrome window opened by the script. Never copy or share the browser profile to troubleshoot authentication.
+
+### Windows PowerShell blocks the launcher
+
+In the current PowerShell window, run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Then run `.\run.ps1` again.
 
 ## Privacy and Git
 
@@ -348,7 +385,7 @@ Do not commit passwords, access tokens, browser profiles, session files, or priv
 
 ## Current scope
 
-This repository contains two standalone tools and a shell launcher. It does not currently provide an integrated background pipeline that automatically starts video processing immediately after a Reel download. It also does not include Instagram publishing/upload functionality. These are separate future features and should not be assumed to be available in this standalone version.
+This repository contains two standalone tools and platform-specific launchers/installers. It does not currently provide an integrated background pipeline that automatically starts video processing immediately after a Reel download. It also does not include Instagram publishing/upload functionality or the optional `ig_login.py` utility.
 
 ---
 

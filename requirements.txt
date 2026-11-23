@@ -1,0 +1,5 @@
+# Python runtime dependencies for the Instagram DM monitor.
+# Video processing itself uses Python's standard library plus system FFmpeg.
+playwright>=1.50
+yt-dlp
+secretstorage>=3.3; sys_platform == "linux"
