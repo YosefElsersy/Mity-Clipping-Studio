@@ -1,0 +1,100 @@
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# ==============================
+# Virtual Environments
+# ==============================
+.venv/
+venv/
+env/
+ENV/
+
+# ==============================
+# Environment Variables & Secrets
+# ==============================
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+config/settings.json
+config/credentials.json
+session.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ==============================
+# Instagram Runtime Data
+# ==============================
+instagram-dm/monitor_state.json
+instagram-dm/reel_links.txt
+instagram-dm/yt_dlp_archive.txt
+instagram-dm/monitor.log
+instagram-dm/dm_*_debug.log
+instagram-dm/dm_*_probe.log
+**/chrome-profile/
+.playwright/
+
+# ==============================
+# Downloaded Reels
+# ==============================
+video-processing/input/reels/*
+!video-processing/input/reels/.gitkeep
+
+video-processing/input/staging/*
+!video-processing/input/staging/.gitkeep
+
+video-processing/input/rejected/*
+!video-processing/input/rejected/.gitkeep
+
+# ==============================
+# Private Video Assets
+# ==============================
+video-processing/input/assets/*
+!video-processing/input/assets/.gitkeep
+
+# ==============================
+# Processed Videos
+# ==============================
+video-processing/output/*
+!video-processing/output/.gitkeep
+
+# ==============================
+# Logs
+# ==============================
+*.log
+logs/*
+!logs/.gitkeep
+video-processing/logs/*
+!video-processing/logs/.gitkeep
+
+# ==============================
+# Runtime State
+# ==============================
+state/*
+!state/.gitkeep
+
+*.sqlite
+*.sqlite3
+*.db
+
+# ==============================
+# Temporary Files
+# ==============================
+*.tmp
+*.partial
+*.partial.*
+.DS_Store
+Thumbs.db
