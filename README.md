@@ -1,10 +1,23 @@
+<p align="center">
+  <img src="mity-logo.svg" alt="MITY — Clipping Automation" width="520">
+</p>
+
+<p align="center">
+  <strong>CLIPPING AUTOMATION</strong><br>
+  Instagram DM monitoring · Video processing · Reel publishing
+</p>
+
 # Mity-Clipping-Studio
 
-**Standalone Instagram Reel monitoring and video-processing tools by $mity.**
+**Standalone Instagram Reel monitoring, video-processing, and publishing tools by $mity.**
 
-Mity-Clipping-Studio contains two independent Python scripts and a colored shell launcher. The Instagram monitor detects newly shared Reel cards in a selected Instagram Direct conversation and downloads the corresponding videos. The video processor prepares eligible source videos for vertical publishing by adding the configured watermark and cover image.
+Mity-Clipping-Studio combines three independent workflows with a colored shell launcher:
 
-The tools are intentionally independent: downloading a Reel does **not** automatically start video processing. Use the launcher to choose which task to run.
+1. **Instagram DM monitor** — detects newly shared Reel cards in a selected Instagram Direct conversation and downloads the corresponding videos.
+2. **Video processor** — prepares eligible source videos for vertical publishing with the configured overlays, watermark, and cover frame.
+3. **Instagram Reel uploader** — an experimental browser-based workflow that publishes videos from the `rejected/` and `output/` folders according to a configured schedule.
+
+The workflows are intentionally independent. Downloading a Reel does **not** automatically start video processing, and processing a video does **not** automatically publish it. Use the launcher to choose the task you want to run.
 
 ## Features
 
@@ -26,13 +39,28 @@ The tools are intentionally independent: downloading a Reel does **not** automat
 - Produces 1080 × 1920 (9:16) H.264 video at 30 FPS.
 - Preserves the complete source image without stretching or cropping it.
 - Adds a blurred, darkened background for videos that are not native 9:16.
-- Applies the green-screen watermark using FFmpeg chroma key.
+- Applies the green-screen overlay using FFmpeg chroma key.
 - Adds the transparent `watermark.png` creator mark near the bottom of the output.
 - Places `cover.jpg` on the first output frame only.
 - Preserves source audio when present.
 - Limits the output duration to the source video's duration.
 - Skips existing outputs unless force mode is explicitly selected.
 - Writes an FFmpeg log for each processed source video.
+
+### Instagram Reel uploader (experimental)
+
+- Uses Playwright to control Instagram's visible desktop website in Chrome.
+- Prompts for one caption at the beginning of a run; that caption is used for the Reels in that run.
+- Checks the required inventory before starting the scheduled workflow.
+- Selects Portrait `9:16` during the upload flow.
+- Uploads `cover.jpg` for videos from `input/rejected/`.
+- Skips the external cover upload for videos from `output/`, because the processed output already contains its cover as the first frame.
+- Uses a separate persistent Chrome profile for uploader login.
+- Opens a fresh browser tab for each Reel.
+- Stores upload progress locally to help avoid repeating confirmed posts after an interruption.
+- Provides separate one-Reel tests for the rejected-video and processed-output paths.
+
+The uploader is experimental and is **not** an official Meta publishing integration. See [Instagram Reel upload automation](#instagram-reel-upload-automation-experimental) for operational details and limitations.
 
 ### Minimum video duration
 
@@ -55,28 +83,33 @@ Clone or place the project at `~/Mity-Clipping-Studio`, because the supplied `ru
 ~/Mity-Clipping-Studio/
 ├── .gitignore
 ├── README.md
+├── mity-logo.svg              # MITY cyan wordmark used in this README
 ├── run.sh
-├── rename_videos.py          # Numbers output and rejected videos for upload
+├── rename_videos.py           # Numbers output and rejected videos for upload
 │
 ├── instagram-dm/
 │   ├── instagram_dm_monitor.py
-│   ├── .venv/                   # Created locally; not committed
-│   ├── monitor_state.json       # Created at runtime; not committed
-│   ├── reel_links.txt           # Created at runtime; not committed
-│   ├── yt_dlp_archive.txt      # Created at runtime; not committed
-│   └── monitor.log              # Created at runtime; not committed
+│   ├── .venv/                 # Created locally; not committed
+│   ├── monitor_state.json     # Created at runtime; not committed
+│   ├── reel_links.txt         # Created at runtime; not committed
+│   ├── yt_dlp_archive.txt    # Created at runtime; not committed
+│   └── monitor.log            # Created at runtime; not committed
+│
+├── instagram-upload/
+│   ├── instagram_reel_uploader.py
+│   └── upload_state.json      # Created at runtime; not committed
 │
 └── video-processing/
     ├── process_videos.py
     ├── input/
-    │   ├── reels/                # Downloaded/source videos
-    │   ├── rejected/             # Videos under 9 seconds or files that cannot be verified
+    │   ├── reels/             # Downloaded/source videos
+    │   ├── rejected/          # Videos under 9 seconds or files that cannot be verified
     │   └── assets/
     │       ├── greenscreen.mp4   # Required top green-screen overlay (user-supplied)
     │       ├── cover.jpg         # Required first-frame cover (user-supplied)
     │       └── watermark.png     # Required transparent creator mark (default included)
-    ├── output/                  # Rendered videos
-    └── logs/                    # Per-video FFmpeg logs
+    ├── output/                # Rendered videos
+    └── logs/                  # Per-video FFmpeg logs
 ```
 
 The `.gitkeep` files preserve empty directories in Git. The `.venv`, downloaded videos, processed outputs, private user-supplied assets, and runtime logs/state are excluded from Git by `.gitignore`. The repository includes a default `watermark.png` file.
@@ -85,9 +118,9 @@ The `.gitkeep` files preserve empty directories in Git. The `.venv`, downloaded 
 
 - Ubuntu 24.04 (or a compatible Linux distribution).
 - Python 3.10 or newer.
-- Google Chrome Stable. The monitor launches the installed Chrome using Playwright's `channel="chrome"` option.
+- Google Chrome Stable. The monitor and uploader use the installed Chrome browser through Playwright.
 - FFmpeg and `ffprobe` for video processing.
-- A working Instagram account that can access the target Direct conversation.
+- A working Instagram account that can access the target Direct conversation and use the intended publishing features.
 - Three required video-processing assets in `video-processing/input/assets/`: `greenscreen.mp4`, `cover.jpg`, and `watermark.png`. The repository includes a default `watermark.png`; the user must supply `greenscreen.mp4` and `cover.jpg`.
 
 ## Installation
@@ -131,9 +164,9 @@ cd ~/Mity-Clipping-Studio
 chmod +x run.sh
 ```
 
-### 4. Create the Instagram monitor virtual environment
+### 4. Create the Python virtual environment
 
-The monitor uses its own virtual environment inside `instagram-dm/`:
+The Instagram monitor and uploader use the same virtual environment inside `instagram-dm/`:
 
 ```bash
 cd ~/Mity-Clipping-Studio/instagram-dm
@@ -143,7 +176,7 @@ python -m pip install --upgrade pip
 python -m pip install playwright yt-dlp secretstorage
 ```
 
-The monitor uses the installed Google Chrome browser, so the project does not require downloading a separate Playwright Chromium browser for this configuration.
+The scripts use the installed Google Chrome browser, so this configuration does not require downloading a separate Playwright Chromium browser.
 
 Deactivate the virtual environment when finished setting it up:
 
@@ -210,6 +243,8 @@ The launcher provides these options:
 | 8 | Check project files and dependencies |
 | 9 | Rename videos in `output/` and `input/rejected/` for upload (each folder numbered separately) |
 | 10 | Open rejected videos |
+| 11 | Check uploader inventory and preview the schedule without opening Chrome |
+| 12 | Start the full Instagram Reel upload workflow |
 | 0 | Exit |
 
 The launcher returns to its menu after the selected script exits. The monitor itself remains active until you stop it with `Ctrl+C`.
@@ -285,29 +320,18 @@ FFmpeg logs are written to:
 ~/Mity-Clipping-Studio/video-processing/logs/
 ```
 
-## Typical workflow
-
-The two scripts are independent and are not automatically chained together:
-
-1. Start the Instagram monitor using option `1` in `./run.sh` (or run it directly).
-2. Let it download shared Reels into `video-processing/input/reels/`.
-3. Stop the monitor with `Ctrl+C` when you are ready to process the downloaded files.
-4. Return to the launcher and choose option `2` for a test or option `3` for batch processing.
-5. Review the rendered videos in `video-processing/output/`. Videos that are too short or cannot be verified are moved to `video-processing/input/rejected/`.
-6. When the videos are ready for uploading, choose option `9` to number the videos in `output/` and `input/rejected/`. Each folder is numbered independently; review the proposed names before confirming.
-
-You can also keep the monitor running in one terminal and run video processing from a second terminal if you want both scripts active at the same time. Avoid processing a file while it is still being downloaded.
-
 ## Instagram Reel upload automation (experimental)
 
 The optional uploader uses Playwright to operate Instagram's visible desktop website in Chrome. It is an experimental UI workflow, not an official Instagram publishing integration. Instagram's terms restrict automated access without express permission; account restrictions or UI changes are possible. The uploader does not use private APIs, stealth techniques, or CAPTCHA/login-challenge bypasses, and it stops if a security checkpoint or activity warning appears. Use it only if you understand and accept those risks.
 
-Before opening Chrome, it asks for one caption (used for every Reel in that run), then checks the inventory:
+### Before starting
+
+At the beginning of a run, the uploader asks for one caption (which is used for every Reel in that run), then checks the inventory:
 
 - At least **38 MP4 files** in `video-processing/input/rejected/`.
 - At least **120 MP4 files** in `video-processing/output/`.
 
-The configured schedule is:
+The full workflow uses this configured schedule:
 
 | Batch | Source | Videos | Wait after batch |
 |---|---|---:|---:|
@@ -319,19 +343,65 @@ The configured schedule is:
 | 6 | `output/` | 20 | 2 hours |
 | 7 | `output/` | 20 | Finish |
 
-**Count clarification:** this exact schedule publishes 38 rejected videos and **99 output videos**, not 120 output videos. With exactly 120 output files, 21 remain unused. The preflight threshold is 120 as requested; the script does not invent extra batches.
+**Count clarification:** this exact schedule publishes 38 rejected videos and **99 output videos**, for **137 Reels total**. With exactly 120 output files, 21 remain unused. The preflight threshold is 120 as requested; the script does not invent extra batches.
 
-Each Reel is handled in a fresh browser tab. The crop step selects Portrait `9:16`. Rejected videos use `video-processing/input/assets/cover.jpg` as an uploaded cover; processed output videos do not get an additional cover because their cover is already included in the rendered video. The caption is filled before Share. A 30-second pause is used between individual posts, and a visible countdown runs during the scheduled batch gaps.
+### Upload behavior
 
-The uploader uses a separate Chrome profile at `~/.local/share/mity-clipping-studio/instagram-upload-profile`; sign in manually. Confirmed uploads and the next scheduled batch are stored locally in `instagram-upload/upload_state.json` so a stopped run can be resumed without automatically repeating confirmed posts. If confirmation is uncertain, inspect Instagram before resuming.
+- Each Reel is handled in a fresh browser tab.
+- The crop step selects Portrait `9:16`.
+- Rejected videos use `video-processing/input/assets/cover.jpg` as an uploaded cover.
+- Processed output videos do not get an additional cover upload because their cover is already included in the rendered video.
+- The caption is filled before Share.
+- A 30-second pause is used between individual posts, and a visible countdown runs during the scheduled batch gaps.
+- The uploader uses a separate Chrome profile at `~/.local/share/mity-clipping-studio/instagram-upload-profile`; sign in manually.
+- Confirmed uploads and the next scheduled batch are stored locally in `instagram-upload/upload_state.json` so a stopped run can be resumed without automatically repeating confirmed posts.
+- If confirmation is uncertain, inspect Instagram before resuming. Do not assume an uncertain post failed and retry it blindly.
 
-Use menu option **11** for a caption prompt, inventory check, and schedule preview without opening Chrome. Use option **12** to start the full workflow. To test the rejected-video path with one Reel, run:
+### Test one Reel before the full schedule
+
+The test modes publish **one real Reel each**; they are not dry runs. Use them to verify the corresponding upload path before starting the full schedule.
+
+Test one video from `input/rejected/` (uses the external `cover.jpg` upload step):
 
 ```bash
+cd ~/Mity-Clipping-Studio
 instagram-dm/.venv/bin/python instagram-upload/instagram_reel_uploader.py --test-one
 ```
 
-The first interaction is the caption prompt. The script then requires explicit typed confirmations before launching the browser and publishing. Do not run a full schedule until the one-Reel test is verified.
+Test one video from `output/` (skips the external cover upload because the output already contains its cover):
+
+```bash
+cd ~/Mity-Clipping-Studio
+instagram-dm/.venv/bin/python instagram-upload/instagram_reel_uploader.py --test-output
+```
+
+Both tests ask for a caption and require the script's explicit confirmations before publishing. They publish one Reel and then exit; they do **not** start the scheduled campaign. Check the Reel on Instagram and confirm that its upload state is recorded before proceeding.
+
+### Start the full scheduled workflow
+
+Use menu option **12**, or run the uploader without a test flag:
+
+```bash
+cd ~/Mity-Clipping-Studio
+instagram-dm/.venv/bin/python instagram-upload/instagram_reel_uploader.py
+```
+
+Menu option **11** checks inventory and previews the schedule without opening Chrome. The full workflow prompts for a caption, performs the preflight checks, and then follows the configured schedule. If the script is interrupted, run the full command again and follow its resume prompts; inspect Instagram first whenever the previous post's result is uncertain.
+
+## Typical workflow
+
+The scripts are independent and are not automatically chained together:
+
+1. Start the Instagram monitor using option `1` in `./run.sh` (or run it directly).
+2. Let it download shared Reels into `video-processing/input/reels/`.
+3. Stop the monitor with `Ctrl+C` when you are ready to process the downloaded files.
+4. Return to the launcher and choose option `2` for a test or option `3` for batch processing.
+5. Review the rendered videos in `video-processing/output/`. Videos that are too short or cannot be verified are moved to `video-processing/input/rejected/`.
+6. When the videos are ready for uploading, choose option `9` to number the videos in `output/` and `input/rejected/`. Each folder is numbered independently; review the proposed names before confirming.
+7. Test both upload paths with one Reel each when needed: `--test-one` for rejected videos and `--test-output` for processed output videos.
+8. After verifying the tests and preparing the required inventory, start the full scheduled uploader using option `12` or the command above.
+
+You can also keep the monitor running in one terminal and run video processing from a second terminal if you want both scripts active at the same time. Avoid processing a file while it is still being downloaded.
 
 ## Troubleshooting
 
@@ -375,22 +445,30 @@ This is expected when `ffprobe` reports a duration below 9.0 seconds. The source
 
 Open the corresponding log file in `video-processing/logs/`. The log filename is based on the source video's name, for example `example_ffmpeg.log`.
 
-### The monitor cannot use the Chrome profile
+### The monitor or uploader cannot use its Chrome profile
 
-Close other Chrome processes using the dedicated monitor profile and start the monitor again. Sign in manually in the Chrome window opened by the script. Never copy or share the browser profile to troubleshoot authentication.
+Close other Chrome processes using the corresponding dedicated profile and start the script again. Sign in manually in the Chrome window opened by the script. The monitor and uploader use separate profiles:
+
+```text
+~/.local/share/instagram-dm/chrome-profile
+~/.local/share/mity-clipping-studio/instagram-upload-profile
+```
+
+Never copy or share either browser profile to troubleshoot authentication.
 
 ## Privacy and Git
 
 The repository intentionally excludes:
 
-- Python virtual environments.
+- Python virtual environments and Python cache files (`__pycache__/`, `*.pyc`).
 - Downloaded Reel files.
 - Processed output videos.
 - `greenscreen.mp4` and `cover.jpg` (private user-supplied assets).
-- The default `watermark.png` is included in the repository; users may replace it with their own transparent PNG while keeping the same filename.
 - Chrome profile data and browser cookies.
-- Runtime state, download archives, and logs.
+- Runtime state, upload progress, download archives, and logs, including `instagram-upload/upload_state.json`.
 - Local credential and secret files.
+
+The default `watermark.png` and the MITY logo `mity-logo.svg` are included in the repository. Users may replace the default watermark with their own transparent PNG while keeping the same filename.
 
 Before every Git commit or push, review the staged file list:
 
@@ -398,12 +476,15 @@ Before every Git commit or push, review the staged file list:
 git status --short --untracked-files=all
 ```
 
-Do not commit passwords, access tokens, browser profiles, session files, or private video assets.
+Do not commit passwords, access tokens, browser profiles, session files, private video assets, or upload-state files.
 
 ## Current scope
 
-This repository contains standalone monitoring and video-processing tools, a shell launcher, and an experimental browser-driven Instagram Reel uploader. Downloading and video processing remain separate steps; the uploader is not an official Meta integration and may be affected by Instagram UI changes or account restrictions.
+This repository contains standalone Instagram DM monitoring, video-processing, and experimental browser-driven Instagram Reel uploading tools, coordinated by a shell launcher. Downloading, processing, and uploading remain separate steps. The uploader is not an official Meta integration and may be affected by Instagram UI changes, platform restrictions, or account-level warnings.
 
 ---
 
-**Mity-Clipping-Studio — Built by $mity.**
+<p align="center">
+  <strong>MITY — Clipping Automation</strong><br>
+  Built by $mity.
+</p>
