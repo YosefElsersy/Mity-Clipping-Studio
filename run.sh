@@ -7,6 +7,7 @@ VIDEO_DIR="$PROJECT_ROOT/video-processing"
 MONITOR_SCRIPT="$MONITOR_DIR/instagram_dm_monitor.py"
 VIDEO_SCRIPT="$VIDEO_DIR/process_videos.py"
 RENAME_SCRIPT="$PROJECT_ROOT/rename_videos.py"
+UPLOAD_SCRIPT="$PROJECT_ROOT/instagram-upload/instagram_reel_uploader.py"
 VENV_PYTHON="$MONITOR_DIR/.venv/bin/python"
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     RESET='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'
@@ -34,7 +35,7 @@ BANNER
 }
 check_layout() {
     local missing=0
-    for file in "$MONITOR_SCRIPT" "$VIDEO_SCRIPT" "$RENAME_SCRIPT"; do
+    for file in "$MONITOR_SCRIPT" "$VIDEO_SCRIPT" "$RENAME_SCRIPT" "$UPLOAD_SCRIPT"; do
         if [[ ! -f "$file" ]]; then
             printf '  %b[!] Missing:%b %s\n' "$RED" "$RESET" "$file"
             missing=1
@@ -102,6 +103,21 @@ run_rename() {
     if [[ $rc -eq 0 ]]; then printf '\n%bRename tool finished.%b\n' "$GREEN" "$RESET"
     else printf '\n%bRename tool exited with code %s.%b\n' "$YELLOW" "$rc" "$RESET"; fi
 }
+run_uploader() {
+    printf '\n%bStarting Instagram Reel Upload Automation...%b\n' "$CYAN$BOLD" "$RESET"
+    if [[ ! -f "$UPLOAD_SCRIPT" ]]; then printf '%bUploader script not found.%b\n' "$RED" "$RESET"; return; fi
+    if [[ ! -x "$VENV_PYTHON" ]]; then printf '%bMonitor virtual environment is missing. Create it first.%b\n' "$RED" "$RESET"; return; fi
+    if ! "$VENV_PYTHON" -c 'import playwright' >/dev/null 2>&1; then
+        printf '%bPlaywright is missing. Install it with the existing project Python:%b\n' "$RED" "$RESET"
+        printf '  %s -m pip install playwright\n' "$VENV_PYTHON"
+        return
+    fi
+    if ! chrome_found; then printf '%bInstall Google Chrome Stable first.%b\n' "$RED" "$RESET"; return; fi
+    (cd "$PROJECT_ROOT" && PYTHONUNBUFFERED=1 "$VENV_PYTHON" "$UPLOAD_SCRIPT" "$@")
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then printf '\n%bUploader finished.%b\n' "$GREEN" "$RESET"
+    else printf '\n%bUploader stopped with code %s.%b\n' "$YELLOW" "$rc" "$RESET"; fi
+}
 open_folder() {
     local folder="$1"
     mkdir -p "$folder"
@@ -146,6 +162,8 @@ while true; do
     printf '  %b[8]%b  Check Project Files\n' "$CYAN$BOLD" "$RESET"
     printf '  %b[9]%b  Rename Output + Rejected Videos for Upload\n' "$CYAN$BOLD" "$RESET"
     printf '  %b[10]%b Open Rejected Videos Folder\n' "$CYAN$BOLD" "$RESET"
+    printf '  %b[11]%b Check Upload Inventory + Preview Schedule\n' "$CYAN$BOLD" "$RESET"
+    printf '  %b[12]%b Start Scheduled Instagram Upload\n' "$CYAN$BOLD" "$RESET"
     printf '  %b[0]%b  Exit\n\n' "$RED$BOLD" "$RESET"
     printf '%bSelect an option:%b ' "$WHITE$BOLD" "$RESET"
     read -r choice || exit 0
@@ -169,6 +187,8 @@ while true; do
         8) header; check_layout || true; show_status; pause ;;
         9) header; run_rename; pause ;;
         10) open_folder "$VIDEO_DIR/input/rejected"; pause ;;
+        11) header; run_uploader --plan-only; pause ;;
+        12) header; run_uploader; pause ;;
         0) printf '\n%bGoodbye — Clipping Automation by $mity%b\n' "$PURPLE$BOLD" "$RESET"; exit 0 ;;
         *) printf '\n%bInvalid option. Choose one of the listed numbers.%b\n' "$RED" "$RESET"; sleep 1 ;;
     esac

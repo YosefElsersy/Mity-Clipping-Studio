@@ -97,3 +97,5 @@ state/*
 *.partial.*
 .DS_Store
 Thumbs.db
+instagram-upload/upload_state.json
+instagram-upload/*.tmp

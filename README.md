@@ -298,6 +298,41 @@ The two scripts are independent and are not automatically chained together:
 
 You can also keep the monitor running in one terminal and run video processing from a second terminal if you want both scripts active at the same time. Avoid processing a file while it is still being downloaded.
 
+## Instagram Reel upload automation (experimental)
+
+The optional uploader uses Playwright to operate Instagram's visible desktop website in Chrome. It is an experimental UI workflow, not an official Instagram publishing integration. Instagram's terms restrict automated access without express permission; account restrictions or UI changes are possible. The uploader does not use private APIs, stealth techniques, or CAPTCHA/login-challenge bypasses, and it stops if a security checkpoint or activity warning appears. Use it only if you understand and accept those risks.
+
+Before opening Chrome, it asks for one caption (used for every Reel in that run), then checks the inventory:
+
+- At least **38 MP4 files** in `video-processing/input/rejected/`.
+- At least **120 MP4 files** in `video-processing/output/`.
+
+The configured schedule is:
+
+| Batch | Source | Videos | Wait after batch |
+|---|---|---:|---:|
+| 1 | `rejected/` | 19 | 2 hours |
+| 2 | `rejected/` | 19 | 4 hours |
+| 3 | `output/` | 19 | 3 hours |
+| 4 | `output/` | 20 | 4 hours |
+| 5 | `output/` | 20 | 2 hours |
+| 6 | `output/` | 20 | 2 hours |
+| 7 | `output/` | 20 | Finish |
+
+**Count clarification:** this exact schedule publishes 38 rejected videos and **99 output videos**, not 120 output videos. With exactly 120 output files, 21 remain unused. The preflight threshold is 120 as requested; the script does not invent extra batches.
+
+Each Reel is handled in a fresh browser tab. The crop step selects Portrait `9:16`. Rejected videos use `video-processing/input/assets/cover.jpg` as an uploaded cover; processed output videos do not get an additional cover because their cover is already included in the rendered video. The caption is filled before Share. A 30-second pause is used between individual posts, and a visible countdown runs during the scheduled batch gaps.
+
+The uploader uses a separate Chrome profile at `~/.local/share/mity-clipping-studio/instagram-upload-profile`; sign in manually. Confirmed uploads and the next scheduled batch are stored locally in `instagram-upload/upload_state.json` so a stopped run can be resumed without automatically repeating confirmed posts. If confirmation is uncertain, inspect Instagram before resuming.
+
+Use menu option **11** for a caption prompt, inventory check, and schedule preview without opening Chrome. Use option **12** to start the full workflow. To test the rejected-video path with one Reel, run:
+
+```bash
+instagram-dm/.venv/bin/python instagram-upload/instagram_reel_uploader.py --test-one
+```
+
+The first interaction is the caption prompt. The script then requires explicit typed confirmations before launching the browser and publishing. Do not run a full schedule until the one-Reel test is verified.
+
 ## Troubleshooting
 
 ### The launcher says the monitor virtual environment is missing
@@ -367,7 +402,7 @@ Do not commit passwords, access tokens, browser profiles, session files, or priv
 
 ## Current scope
 
-This repository contains two standalone tools and a shell launcher. It does not currently provide an integrated background pipeline that automatically starts video processing immediately after a Reel download. It also does not include Instagram publishing/upload functionality. These are separate future features and should not be assumed to be available in this standalone version.
+This repository contains standalone monitoring and video-processing tools, a shell launcher, and an experimental browser-driven Instagram Reel uploader. Downloading and video processing remain separate steps; the uploader is not an official Meta integration and may be affected by Instagram UI changes or account restrictions.
 
 ---
 
