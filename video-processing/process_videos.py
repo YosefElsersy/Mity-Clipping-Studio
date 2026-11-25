@@ -3,6 +3,7 @@
 
 Project layout (relative to this script):
   input/reels/*                 Source reels (square, portrait, or landscape)
+  input/rejected/*              Videos rejected during preflight
   input/assets/greenscreen.mp4  VAVADA green-screen watermark video
   input/assets/cover.jpg        Image used for output frame 0 only
   output/                       Processed videos
@@ -20,6 +21,8 @@ Composition:
   darkened, full-screen copy of that reel. Square 1:1 inputs therefore become
   a sharp 1080x1080 centered video with blurred fill above and below.
 - The greenscreen watermark is keyed to transparency and overlaid near the top.
+- watermark.png is overlaid near the bottom, inside the vertical-video safe area.
+- A subtle contrast/saturation/brightness grade is applied to the source composition.
 - cover.jpg replaces frame zero only; it does not add duration.
 - Original reel audio is retained when present.
 - Output duration is capped to the source Reel duration; a longer watermark clip
@@ -28,7 +31,8 @@ Composition:
 The script never modifies source files. Existing output files are skipped unless
 --force is supplied. A new output replaces an old one only after encoding succeeds.
 --test processes the first eligible input; --batch processes all eligible inputs (9 seconds or longer).
-Shorter videos are rejected before rendering and their source files are kept unchanged.
+Videos shorter than 9 seconds are moved into input/rejected before rendering.
+Files whose video stream or duration cannot be verified are also moved there for manual review.
 """
 
 from __future__ import annotations
@@ -44,9 +48,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 REELS_DIR = ROOT / "input" / "reels"
+REJECTED_DIR = ROOT / "input" / "rejected"
 ASSETS_DIR = ROOT / "input" / "assets"
 OVERLAY_FILE = ASSETS_DIR / "greenscreen.mp4"
 COVER_FILE = ASSETS_DIR / "cover.jpg"
+WATERMARK_FILE = ASSETS_DIR / "watermark.png"
 OUTPUT_DIR = ROOT / "output"
 LOG_DIR = ROOT / "logs"
 SUPPORTED_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
@@ -95,8 +101,23 @@ def has_audio(probe: dict[str, Any]) -> bool:
     return any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
 
 
+def move_to_rejected(source: Path) -> Path:
+    """Move a rejected input to input/rejected without overwriting any file."""
+    REJECTED_DIR.mkdir(parents=True, exist_ok=True)
+    destination = REJECTED_DIR / source.name
+    if destination.exists():
+        index = 1
+        while True:
+            destination = REJECTED_DIR / f"{source.stem}__rejected_{index:03d}{source.suffix}"
+            if not destination.exists():
+                break
+            index += 1
+    source.rename(destination)
+    return destination
+
+
 def validate_inputs() -> None:
-    missing = [p for p in (REELS_DIR, OVERLAY_FILE, COVER_FILE) if not p.exists()]
+    missing = [p for p in (REELS_DIR, OVERLAY_FILE, COVER_FILE, WATERMARK_FILE) if not p.exists()]
     if missing:
         lines = "\n".join(f"  - {p}" for p in missing)
         raise FileNotFoundError(f"Required input path(s) not found:\n{lines}")
@@ -196,6 +217,15 @@ def build_filter_graph(
         )
         layout = "blurred full-screen background + complete sharp original centered"
 
+    # Apply a restrained, natural-looking grade to the video composition only.
+    # Brand overlays and the cover remain unchanged by this filter.
+    graded = (
+        "[base]"
+        f"eq=contrast={args.color_contrast:.3f}:"
+        f"saturation={args.color_saturation:.3f}:"
+        f"brightness={args.color_brightness:.3f}[graded]"
+    )
+
     # Keep the successful VAVADA watermark sizing/positioning. Convert to RGBA
     # before RGB colorkey so FFmpeg has an alpha channel to remove the green.
     foreground = (
@@ -209,7 +239,7 @@ def build_filter_graph(
 
     overlay_x = "(W-w)/2" if args.overlay_x == "center" else args.overlay_x
     composite = (
-        f"[base][fg]overlay=x={overlay_x}:y={args.overlay_y}:"
+        f"[graded][fg]overlay=x={overlay_x}:y={args.overlay_y}:"
         "eof_action=repeat:shortest=0:format=auto,"
         f"trim=duration={duration_text},setpts=PTS-STARTPTS[comp]"
     )
@@ -223,9 +253,23 @@ def build_filter_graph(
         "[comp][cover]overlay=0:0:enable='eq(n,0)':"
         "eof_action=repeat:shortest=0:format=auto,"
         f"trim=duration={duration_text},setpts=PTS-STARTPTS,"
-        "scale=in_range=full:out_range=tv,format=yuv420p,setparams=range=limited[outv]"
+        "scale=in_range=full:out_range=tv,setparams=range=limited[covered]"
     )
-    return ";".join((base, foreground, composite, cover, first_frame)), layout
+
+    # The uploaded creator watermark is a transparent PNG (996x260). Keep its
+    # aspect ratio, scale it to a modest width, and place it above the bottom
+    # UI/caption area. It is composited after the cover so it remains visible
+    # on frame zero as well.
+    bottom_watermark = (
+        f"[3:v]scale={args.watermark_width}:-2:flags=lanczos,format=rgba,"
+        f"colorchannelmixer=aa={args.watermark_opacity:.3f}[wm]"
+    )
+    watermark_overlay = (
+        f"[covered][wm]overlay=x=(W-w)/2:"
+        f"y=H-h-{args.watermark_bottom_margin}:shortest=1:format=auto,"
+        "format=yuv420p,setparams=range=limited[outv]"
+    )
+    return ";".join((base, graded, foreground, composite, cover, first_frame, bottom_watermark, watermark_overlay)), layout
 
 
 def output_path_for(reel: Path) -> Path:
@@ -267,6 +311,7 @@ def process_one(
 
     cmd = [
         "ffmpeg", "-hide_banner", "-y", "-i", str(reel), "-i", str(OVERLAY_FILE), "-i", str(COVER_FILE),
+        "-loop", "1", "-framerate", str(OUT_FPS), "-i", str(WATERMARK_FILE),
         "-filter_complex", graph,
         "-map", "[outv]", "-map", "0:a?",
         "-c:v", "libx264", "-preset", args.preset, "-crf", str(args.crf),
@@ -283,7 +328,17 @@ def process_one(
     print(f"Input dimensions: {source_w}x{source_h} (aspect ratio {source_ar:.5f})")
     print(f"Reel layout: {layout}")
     print(f"Detected chroma key color: {key_color}")
-    print(f"Watermark source width: {args.overlay_width}px; position y={args.overlay_y}px")
+    print(f"Top overlay width: {args.overlay_width}px; position y={args.overlay_y}px")
+    print(
+        f"Bottom watermark: {args.watermark_width}px wide, "
+        f"{args.watermark_bottom_margin}px bottom margin, "
+        f"{args.watermark_opacity:.0%} opacity"
+    )
+    print(
+        f"Color grade: contrast {args.color_contrast:.2f}, "
+        f"saturation {args.color_saturation:.2f}, "
+        f"brightness {args.color_brightness:+.3f}"
+    )
     print(f"RGB colorkey similarity: {args.similarity:.2f} | edge blend: {args.blend:.2f}")
     print(f"Target: {OUT_W}x{OUT_H}, {OUT_FPS} FPS | FFmpeg log: {log_path}")
 
@@ -350,7 +405,19 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--batch", action="store_true", help="Process all supported videos at least 9 seconds long.")
 
     parser.add_argument("--overlay-width", type=int, default=960,
-                        help="Watermark source width in pixels; default 960.")
+                        help="Top green-screen overlay width in pixels; default 960.")
+    parser.add_argument("--watermark-width", type=int, default=540,
+                        help="Bottom creator watermark width in pixels; default 540.")
+    parser.add_argument("--watermark-bottom-margin", type=int, default=250,
+                        help="Gap between the bottom watermark and frame bottom; default 250px.")
+    parser.add_argument("--watermark-opacity", type=float, default=0.92,
+                        help="Bottom watermark opacity from 0 to 1; default 0.92.")
+    parser.add_argument("--color-contrast", type=float, default=1.04,
+                        help="Subtle color-grade contrast; default 1.04.")
+    parser.add_argument("--color-saturation", type=float, default=1.08,
+                        help="Subtle color-grade saturation; default 1.08.")
+    parser.add_argument("--color-brightness", type=float, default=0.005,
+                        help="Subtle color-grade brightness; default 0.005.")
     parser.add_argument("--overlay-y", type=int, default=-40,
                         help="Watermark y position in pixels; default -40.")
     parser.add_argument("--overlay-x", default="center",
@@ -379,8 +446,18 @@ def parse_args() -> argparse.Namespace:
                         help="Reprocess and replace existing output files after a successful render.")
 
     args = parser.parse_args()
-    if args.overlay_width <= 0:
-        parser.error("--overlay-width must be positive")
+    if args.overlay_width <= 0 or args.watermark_width <= 0:
+        parser.error("Overlay widths must be positive")
+    if args.watermark_bottom_margin < 0:
+        parser.error("--watermark-bottom-margin cannot be negative")
+    if not 0 <= args.watermark_opacity <= 1:
+        parser.error("--watermark-opacity must be between 0 and 1")
+    if not 0.5 <= args.color_contrast <= 2:
+        parser.error("--color-contrast must be between 0.5 and 2")
+    if not 0 <= args.color_saturation <= 3:
+        parser.error("--color-saturation must be between 0 and 3")
+    if not -1 <= args.color_brightness <= 1:
+        parser.error("--color-brightness must be between -1 and 1")
     if not 0 <= args.similarity <= 1 or not 0 <= args.blend <= 1:
         parser.error("--similarity and --blend must be between 0 and 1")
     if not 0 <= args.crf <= 51:
@@ -424,9 +501,10 @@ def main() -> int:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         print(f"Found {len(reels)} supported video(s) in {REELS_DIR}.")
+        REJECTED_DIR.mkdir(parents=True, exist_ok=True)
         print(
             f"Minimum duration: {MIN_REEL_DURATION_SECONDS:.1f}s "
-            "(shorter videos will be rejected and left unchanged)."
+            "(shorter videos will be moved to input/rejected)."
         )
 
         # Preflight every source before selecting work. This ensures --test
@@ -445,25 +523,44 @@ def main() -> int:
                     raise RuntimeError("Duration could not be verified by ffprobe.")
                 if not is_duration_eligible(duration):
                     rejected_short += 1
-                    print(
-                        f"[REJECTED - TOO SHORT] {reel.name}: {duration:.3f}s "
-                        f"(minimum {MIN_REEL_DURATION_SECONDS:.1f}s). Source left unchanged."
-                    )
+                    try:
+                        rejected_path = move_to_rejected(reel)
+                        print(
+                            f"[REJECTED - TOO SHORT] {reel.name}: {duration:.3f}s "
+                            f"(minimum {MIN_REEL_DURATION_SECONDS:.1f}s) -> "
+                            f"{rejected_path.relative_to(ROOT)}"
+                        )
+                    except OSError as move_error:
+                        failures.append((reel.name, f"Too short but could not move to rejected: {move_error}"))
+                        print(
+                            f"[MOVE FAILED] {reel.name}: {move_error}. Source remains in input/reels.",
+                            file=sys.stderr,
+                        )
                     continue
                 print(f"[ELIGIBLE] {reel.name}: {duration:.3f}s")
                 eligible.append((reel, probe))
             except Exception as exc:
-                failures.append((reel.name, str(exc)))
-                print(
-                    f"[REJECTED - CANNOT VERIFY] {reel.name}: {exc}",
-                    file=sys.stderr,
-                )
+                try:
+                    rejected_path = move_to_rejected(reel)
+                    failures.append((reel.name, f"Could not verify video: {exc}; moved to {rejected_path}"))
+                    print(
+                        f"[REJECTED - CANNOT VERIFY] {reel.name}: {exc} -> "
+                        f"{rejected_path.relative_to(ROOT)}",
+                        file=sys.stderr,
+                    )
+                except OSError as move_error:
+                    failures.append((reel.name, f"Could not verify: {exc}; could not move: {move_error}"))
+                    print(
+                        f"[REJECTED - CANNOT VERIFY / MOVE FAILED] {reel.name}: {exc}; "
+                        f"source remains in input/reels ({move_error})",
+                        file=sys.stderr,
+                    )
 
         selected = eligible[:1] if args.test else eligible
         print(
             f"\nEligible: {len(eligible)} | Selected for this run: {len(selected)} "
-            f"| Rejected (short): {rejected_short} | Cannot verify: "
-            f"{len(failures)}"
+            f"| Rejected (short and moved): {rejected_short} | "
+            f"Unverifiable/move/render issues: {len(failures)}"
         )
 
         completed = 0
@@ -481,8 +578,8 @@ def main() -> int:
 
         print(
             f"\nFinished: {completed} processed, {skipped} skipped, "
-            f"{rejected_short} rejected (under {MIN_REEL_DURATION_SECONDS:.1f}s), "
-            f"{len(failures)} failed/unverifiable."
+            f"{rejected_short} short videos moved to rejected (under {MIN_REEL_DURATION_SECONDS:.1f}s), "
+            f"{len(failures)} failed/unverifiable or could not be moved."
         )
         print(f"Output folder: {OUTPUT_DIR}")
         print(f"Log folder: {LOG_DIR}")

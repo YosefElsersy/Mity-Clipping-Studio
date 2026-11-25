@@ -53,8 +53,6 @@ instagram-dm/dm_*_probe.log
 video-processing/input/reels/*
 !video-processing/input/reels/.gitkeep
 
-video-processing/input/staging/*
-!video-processing/input/staging/.gitkeep
 
 video-processing/input/rejected/*
 !video-processing/input/rejected/.gitkeep
@@ -64,6 +62,7 @@ video-processing/input/rejected/*
 # ==============================
 video-processing/input/assets/*
 !video-processing/input/assets/.gitkeep
+!video-processing/input/assets/watermark.png
 
 # ==============================
 # Processed Videos

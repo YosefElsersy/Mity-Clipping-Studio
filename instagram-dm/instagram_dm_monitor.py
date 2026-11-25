@@ -43,7 +43,7 @@ LOG_FILE = PROJECT_DIR / "monitor.log"
 ARCHIVE_FILE = PROJECT_DIR / "yt_dlp_archive.txt"
 INBOX_URL = "https://www.instagram.com/direct/inbox/"
 POLL_SECONDS = 0.5
-BUILD_VERSION = "8.5-temporary-tab-no-chat-navigation-dedupe"
+BUILD_VERSION = "8.5.1-temporary-tab-fix-structural-dedupe"
 
 CONTENT_PATH_RE = re.compile(r"^/(p|reel|reels)/([A-Za-z0-9_-]+)/?$")
 DM_PATH_RE = re.compile(r"^/direct/(?:inbox|t/[^/]+)$")
@@ -70,18 +70,17 @@ def debug(message: str) -> None:
 
 def load_state() -> dict:
     if not STATE_FILE.exists():
-        return {"seen_urls": [], "successful_downloads": [], "handled_card_keys": []}
+        return {"seen_urls": [], "successful_downloads": []}
     try:
         obj = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         if not isinstance(obj, dict):
             raise ValueError("state must be a JSON object")
         obj.setdefault("seen_urls", [])
         obj.setdefault("successful_downloads", [])
-        obj.setdefault("handled_card_keys", [])
         return obj
     except Exception as exc:
         log(f"Could not read state file ({type(exc).__name__}); starting fresh.")
-        return {"seen_urls": [], "successful_downloads": [], "handled_card_keys": []}
+        return {"seen_urls": [], "successful_downloads": []}
 
 
 def save_state(state: dict) -> None:
@@ -170,7 +169,7 @@ INSTALL_CARD_OBSERVER = r"""() => {
     return {installed:true, alreadyInstalled:true, path:location.pathname,
             href:location.href, viewport:{w:innerWidth,h:innerHeight}};
   }
-  const state = {installed:true, seq:0, queue:[], seen:new WeakSet(), seenKeys:new Set()};
+  const state = {installed:true, seq:0, queue:[], seen:new WeakSet()};
   window.__igAutoReelV85 = state;
 
   const ICONS = 'svg[aria-label="clip" i], [role="img"][aria-label="clip" i]';
@@ -232,13 +231,13 @@ INSTALL_CARD_OBSERVER = r"""() => {
     const index = allCards.indexOf(card);
     const ordinalFromEnd = index >= 0 ? allCards.length - 1 - index : 0;
     const signature = structuralSignature(card);
-    const key = `${signature}|${allCards.length}|${ordinalFromEnd}|${Math.round(r.width)}x${Math.round(r.height)}`;
-    if (state.seenKeys.has(key)) return;
-    state.seenKeys.add(key);
-
+    // Do not deduplicate using a structural signature: different newly received
+    // Reels can have identical DOM geometry and the same ordinal position.
+    // The WeakSet prevents repeated processing of the same DOM node. Actual
+    // Reel URLs are deduplicated later, after the permalink is captured.
     const id = String(++state.seq);
     card.dataset.igAutoReelCard = id;
-    state.queue.push({id, key, signature, ordinalFromEnd, candidateCount:allCards.length,
+    state.queue.push({id, signature, ordinalFromEnd, candidateCount:allCards.length,
       x:Math.round(r.x), y:Math.round(r.y), w:Math.round(r.width), h:Math.round(r.height),
       centerX:Math.round(centerX), viewportW:innerWidth, side:'left/incoming-heuristic'});
     if (state.queue.length > 30) state.queue.shift();
@@ -516,21 +515,13 @@ def main() -> int:
     label = input("Exact conversation name as shown in the DM inbox list (used to restore this chat): ").strip()
 
     state = load_state()
+    # Older builds persisted structural card keys. Those keys are not unique Reel
+    # identities and could suppress newly received cards with the same layout.
+    if state.pop("handled_card_keys", None) is not None:
+        save_state(state)
+        log("Removed obsolete structural card-deduplication keys; URL download history was preserved.")
     seen_urls = set(str(x) for x in state.get("seen_urls", []))
     successful = set(str(x) for x in state.get("successful_downloads", []))
-    handled_card_keys = set(str(x) for x in state.get("handled_card_keys", []))
-
-    def remember_handled_card(key: str) -> None:
-        if not key:
-            return
-        handled_card_keys.add(key)
-        # Bound state-file growth while retaining recent duplicate protection.
-        recent_keys = sorted(handled_card_keys)[-500:]
-        handled_card_keys.clear()
-        handled_card_keys.update(recent_keys)
-        state["handled_card_keys"] = recent_keys
-        save_state(state)
-
     def handle_url(url: str, source: str) -> None:
         if url in successful:
             log(f"Already downloaded successfully; skipping duplicate: {url}")
@@ -666,13 +657,8 @@ def main() -> int:
                         debug(f"Ignored malformed observer event type={type(event).__name__}")
                         continue
                     try:
-                        card_key = str(event.get("key") or "")
-                        if card_key and card_key in handled_card_keys:
-                            log("Previously handled Reel card ignored before opening; monitored DM tab stays untouched.")
-                            continue
                         permalink = click_and_capture_in_temporary_tab(context, selected_dm_url, event, page)
                         if permalink:
-                            remember_handled_card(card_key)
                             log(f"Automatically captured shared Reel/post permalink: {permalink}")
                             handle_url(permalink, "temporary-tab shared clip card")
                         else:

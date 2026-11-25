@@ -27,6 +27,7 @@ The tools are intentionally independent: downloading a Reel does **not** automat
 - Preserves the complete source image without stretching or cropping it.
 - Adds a blurred, darkened background for videos that are not native 9:16.
 - Applies the green-screen watermark using FFmpeg chroma key.
+- Adds the transparent `watermark.png` creator mark near the bottom of the output.
 - Places `cover.jpg` on the first output frame only.
 - Preserves source audio when present.
 - Limits the output duration to the source video's duration.
@@ -44,7 +45,7 @@ The video processor enforces a **9.0-second minimum duration** using `ffprobe` b
 | Greater than 9.0 seconds | Eligible for processing |
 | Duration missing or invalid | Cannot be verified; processing fails safely |
 
-The check uses the probed duration, not a rounded display value. The rule also applies in `--test`, `--batch`, and `--batch --force` modes. A short source file is **left in `input/reels/` unchanged**; it is not deleted or moved automatically. The minimum is currently defined in `process_videos.py` as `MIN_REEL_DURATION_SECONDS = 9.0`.
+The check uses the probed duration, not a rounded display value. The rule also applies in `--test`, `--batch`, and `--batch --force` modes. A source shorter than 9 seconds is moved to `input/rejected/`; files whose duration or video stream cannot be verified are also moved there for manual review. Files that fail during FFmpeg rendering remain in `input/reels/` so they can be retried. The minimum is currently defined in `process_videos.py` as `MIN_REEL_DURATION_SECONDS = 9.0`.
 
 ## Project structure
 
@@ -195,6 +196,8 @@ The launcher provides these options:
 | 6 | Open the processed videos folder |
 | 7 | Open the FFmpeg logs folder |
 | 8 | Check project files and dependencies |
+| 9 | Rename videos in `output/` and `input/rejected/` for upload (each folder numbered separately) |
+| 10 | Open rejected videos |
 | 0 | Exit |
 
 The launcher returns to its menu after the selected script exits. The monitor itself remains active until you stop it with `Ctrl+C`.
@@ -333,7 +336,7 @@ The repository intentionally excludes:
 - Python virtual environments.
 - Downloaded Reel files.
 - Processed output videos.
-- `greenscreen.mp4` and `cover.jpg`.
+- `greenscreen.mp4` and `cover.jpg` (private user-supplied assets). The `watermark.png` creator mark is included in the repository.
 - Chrome profile data and browser cookies.
 - Runtime state, download archives, and logs.
 - Local credential and secret files.
