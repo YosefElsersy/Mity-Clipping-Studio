@@ -40,10 +40,10 @@ The video processor enforces a **9.0-second minimum duration** using `ffprobe` b
 
 | Source duration | Result |
 |---|---|
-| Less than 9.0 seconds (for example, 8.99 s) | Rejected from processing / skipped |
+| Less than 9.0 seconds (for example, 8.99 s) | Moved automatically to `input/rejected/`; not rendered |
 | Exactly 9.0 seconds | Eligible for processing |
 | Greater than 9.0 seconds | Eligible for processing |
-| Duration missing or invalid | Cannot be verified; processing fails safely |
+| Duration or video stream cannot be verified | Moved to `input/rejected/` for manual review |
 
 The check uses the probed duration, not a rounded display value. The rule also applies in `--test`, `--batch`, and `--batch --force` modes. A source shorter than 9 seconds is moved to `input/rejected/`; files whose duration or video stream cannot be verified are also moved there for manual review. Files that fail during FFmpeg rendering remain in `input/reels/` so they can be retried. The minimum is currently defined in `process_videos.py` as `MIN_REEL_DURATION_SECONDS = 9.0`.
 
@@ -56,6 +56,7 @@ Clone or place the project at `~/Mity-Clipping-Studio`, because the supplied `ru
 ├── .gitignore
 ├── README.md
 ├── run.sh
+├── rename_videos.py          # Numbers output and rejected videos for upload
 │
 ├── instagram-dm/
 │   ├── instagram_dm_monitor.py
@@ -69,14 +70,16 @@ Clone or place the project at `~/Mity-Clipping-Studio`, because the supplied `ru
     ├── process_videos.py
     ├── input/
     │   ├── reels/                # Downloaded/source videos
+    │   ├── rejected/             # Videos under 9 seconds or files that cannot be verified
     │   └── assets/
-    │       ├── greenscreen.mp4   # Required watermark asset
-    │       └── cover.jpg         # Required first-frame cover
+    │       ├── greenscreen.mp4   # Required top green-screen overlay (user-supplied)
+    │       ├── cover.jpg         # Required first-frame cover (user-supplied)
+    │       └── watermark.png     # Required transparent creator mark (default included)
     ├── output/                  # Rendered videos
     └── logs/                    # Per-video FFmpeg logs
 ```
 
-The `.gitkeep` files preserve empty directories in Git. The `.venv`, downloaded videos, processed outputs, private assets, and runtime logs/state are excluded from Git by `.gitignore`.
+The `.gitkeep` files preserve empty directories in Git. The `.venv`, downloaded videos, processed outputs, private user-supplied assets, and runtime logs/state are excluded from Git by `.gitignore`. The repository includes a default `watermark.png` file.
 
 ## Requirements
 
@@ -85,7 +88,7 @@ The `.gitkeep` files preserve empty directories in Git. The `.venv`, downloaded 
 - Google Chrome Stable. The monitor launches the installed Chrome using Playwright's `channel="chrome"` option.
 - FFmpeg and `ffprobe` for video processing.
 - A working Instagram account that can access the target Direct conversation.
-- The two required video assets: `greenscreen.mp4` and `cover.jpg`.
+- Three required video-processing assets in `video-processing/input/assets/`: `greenscreen.mp4`, `cover.jpg`, and `watermark.png`. The repository includes a default `watermark.png`; the user must supply `greenscreen.mp4` and `cover.jpg`.
 
 ## Installation
 
@@ -158,19 +161,28 @@ Create the assets directory if needed:
 mkdir -p ~/Mity-Clipping-Studio/video-processing/input/assets
 ```
 
-Place these two files there:
+The video processor requires **all three files** with these exact names inside `video-processing/input/assets/`:
 
 ```text
-video-processing/input/assets/greenscreen.mp4
-video-processing/input/assets/cover.jpg
+video-processing/input/assets/
+├── greenscreen.mp4
+├── cover.jpg
+└── watermark.png
 ```
 
-These assets are intentionally excluded from Git. Copy them into the project yourself; they are not downloaded automatically by the setup commands.
+| File | Purpose | What the user must do |
+|---|---|---|
+| `greenscreen.mp4` | Green-screen overlay placed near the top; FFmpeg removes the green background using chroma key. | Supply your own green-screen video. The green background should reach the frame edges for reliable key-color detection. |
+| `cover.jpg` | Replaces the first output frame only. | Supply your own cover image. |
+| `watermark.png` | Transparent creator/brand mark placed near the bottom of the video. | A default file is included in this repository. You can keep it or replace it with your own transparent PNG, but keep the exact filename `watermark.png`. |
+
+**Important:** All three files must exist before running video processing. Filenames are case-sensitive on Linux. `greenscreen.mp4` and `cover.jpg` are user-supplied private assets and are not included in Git. The default `watermark.png` is included in the repository. The installer does not download or create replacements for missing assets.
 
 ### 6. Create the remaining working directories
 
 ```bash
 mkdir -p ~/Mity-Clipping-Studio/video-processing/input/reels
+mkdir -p ~/Mity-Clipping-Studio/video-processing/input/rejected
 mkdir -p ~/Mity-Clipping-Studio/video-processing/output
 mkdir -p ~/Mity-Clipping-Studio/video-processing/logs
 ```
@@ -257,7 +269,7 @@ Reprocess eligible videos and replace existing output files only after a success
 python3 process_videos.py --batch --force
 ```
 
-The `--force` option does not bypass the 9-second minimum. Videos shorter than 9 seconds remain skipped.
+The `--force` option does not bypass the 9-second minimum. Videos shorter than 9 seconds are moved automatically from `input/reels/` to `input/rejected/`. Files whose duration or video stream cannot be verified are also moved to `input/rejected/` for manual review. Files that fail during FFmpeg rendering remain in `input/reels/` so they can be retried.
 
 Processed files are written to:
 
@@ -281,7 +293,8 @@ The two scripts are independent and are not automatically chained together:
 2. Let it download shared Reels into `video-processing/input/reels/`.
 3. Stop the monitor with `Ctrl+C` when you are ready to process the downloaded files.
 4. Return to the launcher and choose option `2` for a test or option `3` for batch processing.
-5. Review the rendered videos in `video-processing/output/`.
+5. Review the rendered videos in `video-processing/output/`. Videos that are too short or cannot be verified are moved to `video-processing/input/rejected/`.
+6. When the videos are ready for uploading, choose option `9` to number the videos in `output/` and `input/rejected/`. Each folder is numbered independently; review the proposed names before confirming.
 
 You can also keep the monitor running in one terminal and run video processing from a second terminal if you want both scripts active at the same time. Avoid processing a file while it is still being downloaded.
 
@@ -311,15 +324,17 @@ sudo apt install -y ffmpeg
 
 ### Required assets are missing
 
-Check that both files exist at the exact paths:
+Check that all three required files exist with the exact names:
 
 ```bash
-ls -lh ~/Mity-Clipping-Studio/video-processing/input/assets/
+ls -lh ~/Mity-Clipping-Studio/video-processing/input/assets/{greenscreen.mp4,cover.jpg,watermark.png}
 ```
+
+The repository supplies the default `watermark.png`. You must add `greenscreen.mp4` and `cover.jpg` yourself. Keep the filenames and letter case unchanged.
 
 ### A video is skipped as too short
 
-This is expected when `ffprobe` reports a duration below 9.0 seconds. The source file is left unchanged in `input/reels/`; it is not processed.
+This is expected when `ffprobe` reports a duration below 9.0 seconds. The source file is moved automatically from `input/reels/` to `input/rejected/`; it is not processed.
 
 ### A video fails during rendering
 
@@ -336,7 +351,8 @@ The repository intentionally excludes:
 - Python virtual environments.
 - Downloaded Reel files.
 - Processed output videos.
-- `greenscreen.mp4` and `cover.jpg` (private user-supplied assets). The `watermark.png` creator mark is included in the repository.
+- `greenscreen.mp4` and `cover.jpg` (private user-supplied assets).
+- The default `watermark.png` is included in the repository; users may replace it with their own transparent PNG while keeping the same filename.
 - Chrome profile data and browser cookies.
 - Runtime state, download archives, and logs.
 - Local credential and secret files.
